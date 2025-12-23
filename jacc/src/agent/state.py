@@ -44,7 +44,7 @@ class AgentState(TypedDict):
         total_cost: Cumulative LLM cost in USD
         start_time: Unix timestamp when agent started
     """
-    # Conversation - append-only via LangGraph reducer
+    # Conversation - append-only via LangGraph reducer - no Overwrite
     messages: Annotated[list[Message], add]
     
     # Current step execution

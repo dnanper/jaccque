@@ -33,10 +33,10 @@ class ActNode(EnvironmentNode):
         """Execute current action in environment.
         
         Args:
-            state: Current agent state with current_action
+            state: Current agent state with current_action (bash command)
             
         Returns:
-            State updates with execution result
+            Unformated execution result, need Observation Node to handle
         """
         action = state.get("current_action")
         action_type = state.get("action_type")
