@@ -4,12 +4,6 @@ Supports two modes:
 1. Server Mode: Connect to a running vLLM server via OpenAI-compatible API
 2. Offline Mode: Load model directly in process using vLLM engine
 
-vLLM provides high-throughput inference with:
-- PagedAttention for efficient memory management
-- Continuous batching
-- Tensor parallelism for multi-GPU
-- Speculative decoding
-
 Usage (Server Mode):
     # First start vLLM server:
     # vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
@@ -93,8 +87,8 @@ class VLLMModel(BaseModelProvider):
             from openai import OpenAI
             
             self._client = OpenAI(
-                base_url=f"{self.config.server_url}/v1",
-                api_key=self.config.api_key or "dummy",
+                base_url=f"{self.config.server_url}/v1",    # Do not query to Openai Server, instead query to my vLLM server
+                api_key=self.config.api_key or "dummy",      # Do not use Openai API key
             )
             logger.info(f"Connected to vLLM server at {self.config.server_url}")
         except ImportError:
@@ -165,7 +159,7 @@ class VLLMModel(BaseModelProvider):
         except Exception as e:
             logger.warning(f"Could not apply chat template: {e}")
         
-        # Fallback to simple format
+        # Fallback to simple format, no chat template
         parts = []
         for msg in messages:
             role = msg["role"]

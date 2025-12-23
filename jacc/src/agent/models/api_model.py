@@ -12,7 +12,7 @@ import os
 from typing import Any, Literal
 
 import litellm
-from pydantic import BaseModel as PydanticBaseModel, Field
+from pydantic import BaseModel, Field
 from tenacity import (
     before_sleep_log,
     retry,
@@ -26,7 +26,7 @@ from .base import BaseModelProvider
 logger = logging.getLogger(__name__)
 
 
-class APIModelConfig(PydanticBaseModel):
+class APIModelConfig(BaseModel):
     """Configuration for API-based models."""
     model_name: str = Field(..., description="Model identifier")
     temperature: float = Field(0.7, ge=0.0, le=2.0, description="Temperature")

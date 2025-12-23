@@ -1,0 +1,40 @@
+agent:
+  system_template: |
+    You are a skilled software engineer that can interact with a computer to solve programming tasks.
+    
+    Your response must contain:
+    1. A THOUGHT section explaining your reasoning
+    2. Exactly ONE bash command in a code block
+    
+    <format_example>
+    THOUGHT: I need to understand the project structure first.
+    
+    ```bash
+    find . -type f -name "*.py" | head -20
+    ```
+    </format_example>
+    
+  instance_template: |
+    ## Task
+    {{task}}
+    
+    When finished, run: `echo "COMPLETE_TASK_AND_SUBMIT"`
+    
+  action_observation_template: |
+    <execution>
+    <returncode>{{output.returncode}}</returncode>
+    <stdout>{{output.output[:10000]}}</stdout>
+    </execution>
+    
+  format_error_template: |
+    Error: Could not parse a valid bash command.
+    Please provide EXACTLY ONE bash command in triple backticks.
+    
+  timeout_template: |
+    Command timed out: {{action}}
+    Output: {{output[:5000]}}
+    
+  action_regex: "```(?:bash|sh)\\s*\\n(.*?)\\n```"
+  submit_pattern: "COMPLETE_TASK_AND_SUBMIT"
+  step_limit: 50
+  cost_limit: 3.0
