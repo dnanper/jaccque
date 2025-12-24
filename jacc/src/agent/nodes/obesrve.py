@@ -59,7 +59,7 @@ class ObserveNode(ConfigurableNode):
         self.logger.debug(f"Observation: {observation[:200]}...")
 
         # return only output of the current step, Langraph'll add into messages
-        #  system
+        # system
         return {
             "messages": [{
                 "role": "user",

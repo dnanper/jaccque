@@ -101,7 +101,3 @@ class DockerEnvironment(Environment):
     def __del__(self):
         """Cleanup container when object is destroyed."""
         self.cleanup()
-
-
-    
-
