@@ -1,3 +1,4 @@
 mini-swe-agent/
 test_output/
 tmp/
+__pycache__/

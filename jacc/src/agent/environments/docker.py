@@ -38,7 +38,7 @@ class DockerEnvironment(Environment):
         self,
         *,
         config_class: type = DockerConfig,
-        logger: logging.logger | None = None,
+        logger: logging.Logger | None = None,
         **kwargs,
     ):
         """This class executes bash commands in a Docker container using direct docker commands."""

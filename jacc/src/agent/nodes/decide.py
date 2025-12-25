@@ -96,13 +96,13 @@ class DecideNode(ConfigurableNode):
         return CONTINUE
 
 
-def should_continue(state: "AgentState") -> RoutingDecision:
+def should_continue(state: dict) -> RoutingDecision:
     """Standalone routing function for LangGraph.
     
     Can be used directly as conditional edge function.
     
     Args:
-        state: Current agent state
+        state: Current agent state dict
         
     Returns:
         "continue" or "finish"
@@ -110,3 +110,4 @@ def should_continue(state: "AgentState") -> RoutingDecision:
     if state.get("exit_status"):
         return FINISH
     return CONTINUE
+

@@ -150,7 +150,10 @@ def run_agent(
     logger.info(f"Running agent on task: {task[:100]}...")
     
     # Run graph
-    final_state = graph.invoke(initial_state)
+    # Each agent step = 4 nodes (think→act→observe→decide)
+    # Set recursion_limit accordingly with buffer
+    recursion_limit = config.step_limit * 4 + 10
+    final_state = graph.invoke(initial_state, {"recursion_limit": recursion_limit})
     
     logger.info(
         f"Agent finished: status={final_state.get('exit_status')}, "
