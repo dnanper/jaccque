@@ -67,7 +67,7 @@ class AgentState(TypedDict):
     total_cost: float
     start_time: float
     
-    # HINDLIGHT
+    # HINDSIGHT
     global_guidelines: List[str]
     local_summary: str
 
