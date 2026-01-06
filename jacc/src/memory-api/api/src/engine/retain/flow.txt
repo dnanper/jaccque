@@ -1,0 +1,141 @@
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              retain_batch()                                      │
+│                         Main Orchestrator Function                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ INPUT: contents_dicts = [                                                        │
+│   {"content": "I went to Paris...", "event_date": "2024-06-15", ...},           │
+│   {"content": "I love Italian food...", ...}                                    │
+│ ]                                                                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                    ┌────────────────┴─────────────────┐
+                    ▼                                  │
+    ┌───────────────────────────────┐                 │
+    │ bank_utils.get_bank_profile() │                 │
+    │ → Get agent_name for LLM      │                 │
+    └───────────────────────────────┘                 │
+                    │                                  │
+                    ▼                                  │
+    ┌───────────────────────────────────────────────────────────────┐
+    │ [STEP 1] fact_extraction.extract_facts_from_contents()       │
+    │                                                               │
+    │ • Chunk large text → manageable pieces                       │
+    │ • Call LLM to extract structured facts                       │
+    │                                                               │
+    │ INPUT:  contents, llm_config, agent_name                     │
+    │ OUTPUT: extracted_facts (list[ExtractedFact]), chunks        │
+    └───────────────────────────────────────────────────────────────┘
+                    │
+                    ▼ (If no facts → early return with document tracking only)
+    ┌───────────────────────────────────────────────────────────────┐
+    │ [STEP 2] embedding_processing                                 │
+    │                                                               │
+    │ • augment_texts_with_dates() → Add "happened in June 2024"   │
+    │ • generate_embeddings_batch() → Generate vectors             │
+    │                                                               │
+    │ INPUT:  extracted_facts, format_date_fn, embeddings_model    │
+    │ OUTPUT: embeddings (list[list[float]])                       │
+    └───────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+    ┌───────────────────────────────────────────────────────────────┐
+    │ [STEP 3] ProcessedFact.from_extracted_fact()                  │
+    │                                                               │
+    │ • Combine ExtractedFact + Embedding                          │
+    │ • Prepare for database storage                               │
+    │                                                               │
+    │ OUTPUT: processed_facts (list[ProcessedFact])                │
+    └───────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌═══════════════════════════════════════════════════════════════════════════════┐
+║                        DATABASE TRANSACTION                                    ║
+║═══════════════════════════════════════════════════════════════════════════════║
+║                                                                                ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ fact_storage.ensure_bank_exists()                                 │       ║
+║   │ → Create bank record if not exists                               │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                    │                                          ║
+║                                    ▼                                          ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ [STEP 2.5] fact_storage.handle_document_tracking()               │       ║
+║   │ → Track documents for chunk retrieval later                      │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                    │                                          ║
+║                                    ▼                                          ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ [STEP 3] chunk_storage.store_chunks_batch()                      │       ║
+║   │ → Store raw text chunks for context retrieval                    │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                    │                                          ║
+║                                    ▼                                          ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ [STEP 4] deduplication.check_duplicates_batch()                  │       ║
+║   │                                                                   │       ║
+║   │ • Query DB for similar facts in time window                      │       ║
+║   │ • Use embeddings for semantic similarity                         │       ║
+║   │                                                                   │       ║
+║   │ OUTPUT: is_duplicate_flags (list[bool])                          │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                    │                                          ║
+║                                    ▼                                          ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ deduplication.filter_duplicates()                                │       ║
+║   │ → Remove duplicates from processed_facts                         │       ║
+║   │                                                                   │       ║
+║   │ OUTPUT: non_duplicate_facts                                      │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                    │                                          ║
+║                                    ▼                                          ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ [STEP 5] fact_storage.insert_facts_batch()                       │       ║
+║   │                                                                   │       ║
+║   │ • Batch INSERT into memory_units table                           │       ║
+║   │ • Store text, embedding, timestamps, metadata                    │       ║
+║   │                                                                   │       ║
+║   │ OUTPUT: unit_ids (list[str]) - UUIDs of inserted facts          │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                    │                                          ║
+║                ┌───────────────────┴───────────────────┐                     ║
+║                ▼                                       ▼                      ║
+║   ┌──────────────────────────────┐    ┌──────────────────────────────┐       ║
+║   │ [STEP 6] entity_processing   │    │ [STEP 7-10] link_creation    │       ║
+║   │                              │    │                              │       ║
+║   │ • Extract entities from facts│    │ [7] Temporal links           │       ║
+║   │ • Resolve to canonical IDs  │    │     → Time-based connections │       ║
+║   │ • Create unit-entity links  │    │                              │       ║
+║   │                              │    │ [8] Semantic links           │       ║
+║   │ OUTPUT: entity_links         │    │     → Meaning-based links    │       ║
+║   └──────────────────────────────┘    │                              │       ║
+║                │                      │ [9] Entity links             │       ║
+║                │                      │     → Shared entity links    │       ║
+║                └──────────────────────┤                              │       ║
+║                                       │ [10] Causal links            │       ║
+║                                       │     → Cause-effect links     │       ║
+║                                       └──────────────────────────────┘       ║
+║                                                    │                          ║
+║                                                    ▼                          ║
+║   ┌───────────────────────────────────────────────────────────────────┐       ║
+║   │ [STEP 11] observation_regeneration.regenerate_observations_batch │       ║
+║   │ → Update entity observations based on new facts                  │       ║
+║   └───────────────────────────────────────────────────────────────────┘       ║
+║                                                                                ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+                                    │
+                                    ▼   (After transaction commits)
+    ┌───────────────────────────────────────────────────────────────────┐
+    │ _trigger_background_tasks()                                       │
+    │                                                                   │
+    │ • Submit "reinforce_opinion" task to task_backend                │
+    │ • Runs asynchronously (doesn't block return)                     │
+    └───────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ OUTPUT: [[unit_id_1, unit_id_2], [unit_id_3], ...]                              │
+│         (List of unit IDs per input content item)                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
