@@ -1,0 +1,99 @@
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                           FACT TYPE FLOW                                             │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                      │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                         1️⃣ EXPERIENCE & WORLD                                  │ │
+│  │                    (User provides content to store)                            │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                         │                                            │
+│                                         ▼                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │ memory_engine.retain_async() / retain_batch_async()                            │ │
+│  │                                                                                 │ │
+│  │ Parameters:                                                                     │ │
+│  │   - content: "I went to Paris last summer"                                     │ │
+│  │   - fact_type_override: "experience" | "world" | None (auto-detect)            │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                         │                                            │
+│                                         ▼                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │ retain/orchestrator.py → retain_batch()                                        │ │
+│  │                                                                                 │ │
+│  │ • If fact_type_override provided → use it                                      │ │
+│  │ • Else → LLM extracts facts with fact_type = "experience" or "world"           │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                         │                                            │
+│                                         ▼                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │ retain/fact_storage.py → insert_facts_batch()                                  │ │
+│  │                                                                                 │ │
+│  │ INSERT INTO memory_units (..., fact_type, ...) VALUES (...)                    │ │
+│  │                          ↑                                                      │ │
+│  │                          │                                                      │ │
+│  │         fact_type = processed_fact.fact_type                                   │ │
+│  │                     ("experience" | "world")                                   │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                      │
+│ ═══════════════════════════════════════════════════════════════════════════════════│
+│                                                                                      │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                         2️⃣ OPINION                                             │ │
+│  │        (Auto-generated after think() OR user provides)                         │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                         │                                            │
+│       ┌─────────────────────────────────┼─────────────────────────────────────┐     │
+│       ▼                                 │                                     ▼     │
+│  ┌────────────────────────┐             │             ┌────────────────────────┐    │
+│  │ User explicit store    │             │             │ After think() response │    │
+│  │                        │             │             │                        │    │
+│  │ retain_async(          │             │             │ memory_engine.py       │    │
+│  │   content="I think..." │             │             │ _store_opinions()      │    │
+│  │   fact_type_override=  │             │             │   Line 3256-3264       │    │
+│  │     "opinion"          │             │             │                        │    │
+│  │ )                      │             │             │ Calls retain_async(    │    │
+│  └────────────────────────┘             │             │   fact_type_override=  │    │
+│       │                                 │             │     "opinion"          │    │
+│       └─────────────────────────────────┴─────────────│ )                      │    │
+│                                         │             └────────────────────────┘    │
+│                                         ▼                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │ SAME PATH: retain/fact_storage.py → insert_facts_batch()                       │ │
+│  │                                                                                 │ │
+│  │ INSERT INTO memory_units (..., fact_type = 'opinion', ...)                     │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                      │
+│ ═══════════════════════════════════════════════════════════════════════════════════│
+│                                                                                      │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                         3️⃣ OBSERVATION                                         │ │
+│  │        (Auto-generated during retain, NOT user provided)                       │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                         │                                            │
+│                                         ▼                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │ retain/orchestrator.py → Step [11]                                             │ │
+│  │                                                                                 │ │
+│  │ observation_regeneration.regenerate_observations_batch()                       │ │
+│  │   Called AFTER facts are stored, INSIDE same transaction                       │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                         │                                            │
+│                                         ▼                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │ retain/observation_regeneration.py                                             │ │
+│  │   _regenerate_entity_observations() - Lines 195-252                            │ │
+│  │                                                                                 │ │
+│  │ [1] DELETE old observations for entity                                         │ │
+│  │     DELETE FROM memory_units WHERE fact_type = 'observation' AND ...           │ │
+│  │                                                                                 │ │
+│  │ [2] Call LLM to extract new observations from related facts                    │ │
+│  │     observation_utils.extract_observations_from_facts(entity_name, facts)      │ │
+│  │                                                                                 │ │
+│  │ [3] INSERT new observations (Line 222-238)                                     │ │
+│  │     INSERT INTO memory_units (..., fact_type = 'observation', ...)             │ │
+│  │                                                                                 │ │
+│  │ [4] Link to entity table                                                       │ │
+│  │     INSERT INTO unit_entities (unit_id, entity_id) VALUES (...)                │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
