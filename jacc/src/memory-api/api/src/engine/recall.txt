@@ -1,0 +1,154 @@
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 RECALL PIPELINE                                          │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   USER QUERY: "What did John do in Paris last summer?"                                   │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 1: recall_async()                                                            │  │
+│   │                                                                                   │  │
+│   │ • Authenticate tenant                                                             │  │
+│   │ • Validate fact_type (world, experience, opinion, observation)                   │  │
+│   │ • Map budget enum → thinking_budget number                                        │  │
+│   │   - LOW: 100, MID: 300, HIGH: 1000                                               │  │
+│   │ • Acquire search semaphore (limit 10 concurrent searches)                         │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 2: _search_with_retries()                                                    │  │
+│   │                                                                                   │  │
+│   │ [2.1] Generate Query Embedding                                                    │  │
+│   │       query_embedding = embeddings.generate_embedding(query)                      │  │
+│   │       → [0.02, -0.18, 0.55, ...] (384 floats)                                     │  │
+│   │                                                                                   │  │
+│   │       CPU: Same as retain - local=CPU-heavy, TEI=network I/O                      │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 3: N×4-Way Parallel Retrieval (N fact types × 4 methods)                     │  │
+│   │                                                                                   │  │
+│   │   For each fact_type in [experience, world, opinion]:                             │  │
+│   │       retrieve_parallel(query, embedding, fact_type)                              │  │
+│   │                                                                                   │  │
+│   │   asyncio.gather(*retrieval_tasks)  ← Run ALL in parallel!                        │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│             ┌────────────────────────┼────────────────────────┐                          │
+│             ▼                        ▼                        ▼                          │
+│   ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐               │
+│   │ SEMANTIC SEARCH     │ │ BM25 KEYWORD SEARCH │ │ GRAPH TRAVERSAL     │               │
+│   │                     │ │                     │ │                     │               │
+│   │ SQL:                │ │ SQL:                │ │ BFS/MPFP algorithm  │               │
+│   │ SELECT ... WHERE    │ │ SELECT ... WHERE    │ │                     │               │
+│   │ 1-(embedding<=>$1)  │ │ ts_rank_cd(         │ │ Entry points →      │               │
+│   │   >= threshold      │ │   tsvector,         │ │ Follow links →      │               │
+│   │ ORDER BY similarity │ │   plainto_tsquery())│ │ Spread activation   │               │
+│   │ LIMIT budget        │ │ > 0                 │ │                     │               │
+│   │                     │ │ ORDER BY bm25_score │ │ DB: memory_links    │               │
+│   │ DB: pgvector <=>    │ │ LIMIT budget        │ │     table traverse  │               │
+│   │     cosine distance │ │                     │ │                     │               │
+│   └─────────────────────┘ └─────────────────────┘ └─────────────────────┘               │
+│             │                        │                        │                          │
+│             │            ┌───────────┴───────────┐            │                          │
+│             │            ▼                       │            │                          │
+│             │ ┌─────────────────────┐            │            │                          │
+│             │ │ TEMPORAL SEARCH     │            │            │                          │
+│             │ │ (if query has date) │            │            │                          │
+│             │ │                     │            │            │                          │
+│             │ │ Parse "last summer" │            │            │                          │
+│             │ │ → 2024-06-01 to     │            │            │                          │
+│             │ │   2024-08-31        │            │            │                          │
+│             │ │                     │            │            │                          │
+│             │ │ SQL: WHERE          │            │            │                          │
+│             │ │ occurred_start      │            │            │                          │
+│             │ │ BETWEEN $1 AND $2   │            │            │                          │
+│             │ └─────────────────────┘            │            │                          │
+│             │            │                       │            │                          │
+│             └────────────┴───────────────────────┴────────────┘                          │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 4: Reciprocal Rank Fusion (RRF)                                              │  │
+│   │                                                                                   │  │
+│   │ Merge 3-4 ranked lists into one:                                                  │  │
+│   │ score(doc) = Σ 1/(k + rank_i(doc))  for each retrieval method i                   │  │
+│   │                                                                                   │  │
+│   │ Example:                                                                          │  │
+│   │   Doc "John visited Paris" appears at:                                            │  │
+│   │   - Semantic: rank 1  → score = 1/(60+1) = 0.0164                                │  │
+│   │   - BM25: rank 3      → score = 1/(60+3) = 0.0159                                │  │
+│   │   - Graph: rank 5     → score = 1/(60+5) = 0.0154                                │  │
+│   │   RRF score = 0.0164 + 0.0159 + 0.0154 = 0.0477                                  │  │
+│   │                                                                                   │  │
+│   │ CPU: Pure Python computation (fast, in-memory)                                    │  │
+│   │ OUTPUT: list[MergedCandidate] with rrf_score                                      │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 5: Cross-Encoder Reranking                                                   │  │
+│   │                                                                                   │  │
+│   │ For each candidate:                                                               │  │
+│   │   score = cross_encoder.predict([query, document_text])                           │  │
+│   │                                                                                   │  │
+│   │ Model: cross-encoder/ms-marco-MiniLM-L-6-v2                                       │  │
+│   │ CPU: HEAVY - neural network inference                                             │  │
+│   │   - LOCAL: Runs on CPU (or GPU if available)                                      │  │
+│   │   - TEI: Network I/O to TEI server                                               │  │
+│   │                                                                                   │  │
+│   │ OUTPUT: list[ScoredResult] with cross_encoder_score                              │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 6: Combined Scoring (weighted ensemble)                                      │  │
+│   │                                                                                   │  │
+│   │ combined_score =                                                                  │  │
+│   │     0.6 × cross_encoder_score   (semantic relevance)                             │  │
+│   │   + 0.2 × rrf_normalized        (retrieval consensus)                            │  │
+│   │   + 0.1 × temporal_proximity    (time relevance)                                  │  │
+│   │   + 0.1 × recency               (prefer recent facts)                            │  │
+│   │                                                                                   │  │
+│   │ Sort by combined_score descending                                                 │  │
+│   │ CPU: Pure Python math (fast)                                                      │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 7: Token Budget Filtering                                                    │  │
+│   │                                                                                   │  │
+│   │ encoding = tiktoken.get_encoding("cl100k_base")                                    │  │
+│   │ for result in sorted_results:                                                     │  │
+│   │     tokens = len(encoding.encode(result.text))                                    │  │
+│   │     if total_tokens + tokens <= max_tokens:                                       │  │
+│   │         include(result)                                                           │  │
+│   │     else:                                                                         │  │
+│   │         break                                                                     │  │
+│   │                                                                                   │  │
+│   │ CPU: tiktoken encoding (fast, cached)                                             │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 8: Background Tasks                                                          │  │
+│   │                                                                                   │  │
+│   │ await task_backend.submit_task({                                                  │  │
+│   │     "type": "access_count_update",                                                │  │
+│   │     "node_ids": [visited_fact_ids]  # Top 50 results                             │  │
+│   │ })                                                                                │  │
+│   │                                                                                   │  │
+│   │ → Later: UPDATE memory_units SET access_count = access_count + 1                 │  │
+│   │          WHERE id = ANY($1::uuid[])                                               │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                          │
+│   OUTPUT: RecallResultModel(                                                             │
+│       results=[MemoryFact(id, text, fact_type, entities, ...)],                         │
+│       trace=Optional[dict],                                                              │
+│       entities=Optional[dict[str, EntityState]],                                        │
+│       chunks=Optional[dict[str, ChunkInfo]]                                             │
+│   )                                                                                      │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘

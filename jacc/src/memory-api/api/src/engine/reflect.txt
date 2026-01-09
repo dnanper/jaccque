@@ -1,0 +1,136 @@
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 REFLECT PIPELINE                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   USER QUERY: "Who is more reliable, Alice or Bob?"                                      │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 1: reflect_async()                                                           │  │
+│   │                                                                                   │  │
+│   │ • Authenticate tenant                                                             │  │
+│   │ • Validate operation                                                              │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 2: Multi-Fact-Type Recall (12-way: 4 methods × 3 fact types)                 │  │
+│   │                                                                                   │  │
+│   │ search_result = await self.recall_async(                                          │  │
+│   │     bank_id=bank_id,                                                              │  │
+│   │     query=query,                                                                  │  │
+│   │     fact_type=["experience", "world", "opinion"],  # All 3 types!                 │  │
+│   │     max_tokens=4096,                                                              │  │
+│   │     include_entities=True                                                         │  │
+│   │ )                                                                                 │  │
+│   │                                                                                   │  │
+│   │ Split results by fact_type:                                                       │  │
+│   │ • agent_results  = [r for r if r.fact_type == "experience"]                       │  │
+│   │ • world_results  = [r for r if r.fact_type == "world"]                            │  │
+│   │ • opinion_results = [r for r if r.fact_type == "opinion"]                         │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 3: Get Bank Profile                                                          │  │
+│   │                                                                                   │  │
+│   │ profile = await self.get_bank_profile(bank_id)                                    │  │
+│   │                                                                                   │  │
+│   │ Returns:                                                                          │  │
+│   │ {                                                                                 │  │
+│   │   "name": "Assistant",                                                            │  │
+│   │   "disposition": {                                                                │  │
+│   │     "skepticism": 3,   # 1-5: How skeptical                                       │  │
+│   │     "literalism": 3,   # 1-5: How literal                                         │  │
+│   │     "empathy": 3       # 1-5: How empathetic                                      │  │
+│   │   },                                                                              │  │
+│   │   "background": "I am an AI assistant..."                                         │  │
+│   │ }                                                                                 │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 4: Build LLM Prompt (think_utils.py)                                         │  │
+│   │                                                                                   │  │
+│   │ prompt = build_think_prompt(                                                       │  │
+│   │   agent_facts_text=format_facts(experience_facts),                                │  │
+│   │   world_facts_text=format_facts(world_facts),                                     │  │
+│   │   opinion_facts_text=format_facts(opinion_facts),                                 │  │
+│   │   query=query,                                                                    │  │
+│   │   name="Assistant",                                                               │  │
+│   │   disposition=disposition,                                                        │  │
+│   │   background=background,                                                          │  │
+│   │   context=additional_context                                                       │  │
+│   │ )                                                                                 │  │
+│   │                                                                                   │  │
+│   │ PROMPT STRUCTURE:                                                                 │  │
+│   │ ┌─────────────────────────────────────────────────────────────────────────────┐  │  │
+│   │ │ My name is: {name}                                                          │  │  │
+│   │ │ My background: {background}                                                 │  │  │
+│   │ │                                                                             │  │  │
+│   │ │ == What I Know About The World ==                                           │  │  │
+│   │ │ {formatted world facts}                                                     │  │  │
+│   │ │                                                                             │  │  │
+│   │ │ == My Personal Experiences ==                                               │  │  │
+│   │ │ {formatted experience facts}                                                │  │  │
+│   │ │                                                                             │  │  │
+│   │ │ == My Opinions ==                                                           │  │  │
+│   │ │ {formatted opinion facts}                                                   │  │  │
+│   │ │                                                                             │  │  │
+│   │ │ == Question ==                                                              │  │  │
+│   │ │ {query}                                                                     │  │  │
+│   │ │                                                                             │  │  │
+│   │ │ Based on everything I know...                                               │  │  │
+│   │ └─────────────────────────────────────────────────────────────────────────────┘  │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 5: LLM Call                                                                  │  │
+│   │                                                                                   │  │
+│   │ system_message = get_system_message(disposition)                                  │  │
+│   │ # "You are a person with your own thoughts, experiences, opinions..."            │  │
+│   │                                                                                   │  │
+│   │ answer_text = await self._llm_config.call(                                        │  │
+│   │     messages=[                                                                    │  │
+│   │         {"role": "system", "content": system_message},                            │  │
+│   │         {"role": "user", "content": prompt}                                       │  │
+│   │     ],                                                                            │  │
+│   │     scope="memory_think",                                                         │  │
+│   │     temperature=0.9,            # Higher creativity                               │  │
+│   │     max_completion_tokens=1000                                                    │  │
+│   │ )                                                                                 │  │
+│   │                                                                                   │  │
+│   │ CPU: Network I/O to LLM API (async, non-blocking)                                │  │
+│   │ Model: Gemini/OpenAI/Groq (configured via env vars)                              │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 6: Background Opinion Extraction                                             │  │
+│   │                                                                                   │  │
+│   │ # Submit to task backend (non-blocking, returns immediately)                      │  │
+│   │ await task_backend.submit_task({                                                  │  │
+│   │     "type": "form_opinion",                                                       │  │
+│   │     "bank_id": bank_id,                                                           │  │
+│   │     "answer_text": answer_text,                                                   │  │
+│   │     "query": query                                                                │  │
+│   │ })                                                                                │  │
+│   │                                                                                   │  │
+│   │ LATER (background):                                                               │  │
+│   │ 1. Call LLM to extract opinions from answer                                       │  │
+│   │ 2. For each opinion:                                                              │  │
+│   │    await retain_async(content=opinion, fact_type_override="opinion")              │  │
+│   └───────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                          │
+│   OUTPUT: ReflectResult(                                                                 │
+│       text="Based on my experience with both Alice and Bob, I believe Alice is...",    │
+│       based_on={                                                                         │
+│           "world": [MemoryFact(...)],                                                   │
+│           "experience": [MemoryFact(...)],                                              │
+│           "opinion": [MemoryFact(...)]                                                  │
+│       },                                                                                 │
+│       new_opinions=[]  # Empty because opinions are extracted asynchronously           │
+│   )                                                                                      │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘

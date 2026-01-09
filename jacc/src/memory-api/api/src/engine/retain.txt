@@ -1,0 +1,134 @@
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 RETAIN PIPELINE                                          │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   USER INPUT: "John visited Paris last summer for a conference"                          │
+│                                      │                                                   │
+│                                      ▼                                                   │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 1: retain_batch_async()                                                      │  │
+│   │                                                                                   │  │
+│   │ • Authenticate tenant (set schema in contextvar)                                 │  │
+│   │ • Validate operation (if validator configured)                                   │  │
+│   │ • Auto-chunk large batches (>600K chars → split to sub-batches)                  │  │
+│   │                                                                                   │  │
+│   │ CPU: Main event loop thread (async I/O, no heavy CPU)                             │  │
+│   └───────────────────────────────────────────────────────┬──────────────────────────┘  │
+│                                                           ▼                              │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 2: _retain_batch_async_internal() → orchestrator.retain_batch()              │  │
+│   │                                                                                   │  │
+│   │ • Uses semaphore (_put_semaphore=5) for backpressure                             │  │
+│   │ • Calls modular retain/orchestrator.py                                            │  │
+│   └───────────────────────────────────────────────────────┬──────────────────────────┘  │
+│                                                           ▼                              │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 3: LLM Fact Extraction (orchestrator → fact_extraction.py)                  │  │
+│   │                                                                                   │  │
+│   │ • Text chunking (semantic + overlap)                                              │  │
+│   │ • Send chunks to LLM with structured prompt                                       │  │
+│   │ • Parse JSON response → ExtractedFact objects                                     │  │
+│   │ • fact_type = "experience" (personal) or "world" (general knowledge)              │  │
+│   │                                                                                   │  │
+│   │ CPU: Async HTTP call to LLM API (network I/O, not CPU-bound)                      │  │
+│   │ Model: Gemini/OpenAI/Groq LLM (self._llm_config)                                  │  │
+│   │                                                                                   │  │
+│   │ OUTPUT: [                                                                         │  │
+│   │   ExtractedFact(text="John visited Paris", fact_type="experience",                │  │
+│   │                 entities=[Entity(text="John"), Entity(text="Paris")],             │  │
+│   │                 occurred="last summer", causal_relations=[...])                   │  │
+│   │ ]                                                                                 │  │
+│   └───────────────────────────────────────────────────────┬──────────────────────────┘  │
+│                                                           ▼                              │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 4: Embedding Generation (embedding_processing.py)                           │  │
+│   │                                                                                   │  │
+│   │ • Augment facts with temporal info: "June 2024: John visited Paris"              │  │
+│   │ • Generate embeddings in batch (1 API call for all facts)                        │  │
+│   │                                                                                   │  │
+│   │ CPU: Depends on provider:                                                         │  │
+│   │   - LOCAL: Heavy CPU (sentence-transformers model inference)                     │  │
+│   │   - TEI: Network I/O only (external server does computation)                     │  │
+│   │                                                                                   │  │
+│   │ Model: self.embeddings (BAAI/bge-small-en-v1.5 default)                          │  │
+│   │                                                                                   │  │
+│   │ OUTPUT: list[float] embeddings (384 dimensions)                                   │  │
+│   └───────────────────────────────────────────────────────┬──────────────────────────┘  │
+│                                                           ▼                              │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 5: Deduplication Check (deduplication.py)                                   │  │
+│   │                                                                                   │  │
+│   │ • Check if similar fact already exists within time window                         │  │
+│   │ • Query: SELECT ... WHERE cosine_similarity > 0.95 AND time_diff < 24h           │  │
+│   │                                                                                   │  │
+│   │ DB Query: pgvector cosine distance (1 - (embedding <=> $1::vector))              │  │
+│   └───────────────────────────────────────────────────────┬──────────────────────────┘  │
+│                                                           ▼                              │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 6: Database Transaction (ATOMIC - all or nothing)                           │  │
+│   │                                                                                   │  │
+│   │ [6a] ensure_bank_exists()   → INSERT INTO banks ON CONFLICT DO NOTHING           │  │
+│   │ [6b] handle_doc_tracking()  → DELETE/INSERT INTO documents (upsert logic)        │  │
+│   │ [6c] store_chunks_batch()   → INSERT INTO chunks                                  │  │
+│   │ [6d] insert_facts_batch()   → INSERT INTO memory_units RETURNING id               │  │
+│   │ [6e] insert_entity_links()  → INSERT INTO unit_entities                           │  │
+│   │ [6f] create_temporal_links()→ INSERT INTO memory_links (link_type='temporal')     │  │
+│   │ [6g] create_semantic_links()→ INSERT INTO memory_links (link_type='semantic')     │  │
+│   │ [6h] create_entity_links()  → INSERT INTO memory_links (link_type='entity')       │  │
+│   │ [6i] create_causal_links()  → INSERT INTO memory_links (link_type='causal')       │  │
+│   │ [6j] regenerate_observations() → DELETE + INSERT observations for top entities   │  │
+│   │                                                                                   │  │
+│   │ DB: Single transaction (COMMIT at end, ROLLBACK on any error)                    │  │
+│   │ Connection: From asyncpg pool, released after commit                              │  │
+│   └───────────────────────────────────────────────────────┬──────────────────────────┘  │
+│                                                           ▼                              │
+│   ┌──────────────────────────────────────────────────────────────────────────────────┐  │
+│   │ Step 7: Background Tasks (via TaskBackend)                                       │  │
+│   │                                                                                   │  │
+│   │ • Trigger observation regeneration for touched entities                           │  │
+│   │ • These run asynchronously after response is returned                             │  │
+│   └──────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                          │
+│   OUTPUT: List[List[str]] - Unit IDs grouped by input content item                      │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            CPU/THREAD MODEL - RETAIN                                     │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   MAIN THREAD (Event Loop)                                                               │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │                                                                                  │   │
+│   │  async def retain_batch_async():                                                │   │
+│   │      await authenticate()     # Async I/O (fast)                                │   │
+│   │      await orchestrator.retain_batch()                                          │   │
+│   │          │                                                                       │   │
+│   │          ├── await llm_config.call()   # Network I/O (non-blocking)             │   │
+│   │          │       └── HTTP request to LLM API                                    │   │
+│   │          │                                                                       │   │
+│   │          ├── await embeddings.generate_batch()                                  │   │
+│   │          │       ├── LOCAL: run_in_executor(thread_pool, model.encode)          │   │
+│   │          │       │       └── CPU HEAVY (offloaded to thread pool)               │   │
+│   │          │       └── TEI: aiohttp request (network I/O)                         │   │
+│   │          │                                                                       │   │
+│   │          └── await conn.execute(INSERT ...)  # Database I/O (non-blocking)      │   │
+│   │                                                                                  │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+│   THREAD POOL (for CPU-bound tasks)                                                      │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  • Local embedding model inference (sentence-transformers)                       │   │
+│   │  • Token counting (tiktoken)                                                     │   │
+│   │  • JSON parsing for large LLM responses                                          │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+│   ASYNCPG CONNECTION POOL                                                                │
+│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
+│   │  • min_size=5, max_size=100                                                      │   │
+│   │  • Each retain holds 1 connection during transaction                             │   │
+│   │  • Semaphore limits concurrent retains to 5 (backpressure)                       │   │
+│   └─────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘

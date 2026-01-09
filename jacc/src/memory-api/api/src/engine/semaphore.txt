@@ -1,0 +1,25 @@
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            VỚI SEMAPHORE (BACKPRESSURE)                                  │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   Scenario: 200 concurrent recall requests đến cùng lúc                                  │
+│                                                                                          │
+│                      ┌───────────────────────────────────┐                              │
+│   Request 1 ─────┐   │      SEMAPHORE (10 permits)       │                              │
+│   Request 2 ─────┤   │                                   │                              │
+│   ...            │   │  ✅ Requests 1-10: Proceed        │                              │
+│   Request 10 ────┼──►│                                   │──► CONNECTION POOL           │
+│   Request 11 ────┤   │  ⏳ Requests 11-200: WAIT         │    (max 100 connections)     │
+│   ...            │   │     (không block, chỉ await)      │                              │
+│   Request 200 ───┘   │                                   │    Sử dụng ~20-40 connections │
+│                      │  Khi request 1 xong:              │    (10 searches × 2-4 conns) │
+│                      │  ✅ Request 11 được phép proceed  │                              │
+│                      └───────────────────────────────────┘                              │
+│                                                                                          │
+│   Benefits:                                                                              │
+│   ✅ Connection pool không bao giờ exhausted                                            │
+│   ✅ Database có workload ổn định                                                        │
+│   ✅ Memory usage được kiểm soát                                                         │
+│   ✅ Latency predictable (không có thundering herd)                                      │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘

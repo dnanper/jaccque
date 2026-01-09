@@ -1,0 +1,45 @@
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            VẤN ĐỀ KHÔNG CÓ TASK BACKEND                                 │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   User gọi reflect("What do you think about X?")                                        │
+│                                                                                          │
+│   Timeline:                                                                              │
+│   ┌────────────────────────────────────────────────────────────────────────────────────┐│
+│   │ T0: Recall facts (500ms)                                                           ││
+│   │ T1: Generate response with LLM (2000ms)                                            ││
+│   │ T2: Extract opinions from response (1000ms)  ← User đang chờ!                      ││
+│   │ T3: Store opinions to database (500ms)       ← User vẫn chờ!                       ││
+│   │ T4: Update access counts (200ms)             ← User vẫn chờ!                       ││
+│   │ T5: Return response to user                                                        ││
+│   └────────────────────────────────────────────────────────────────────────────────────┘│
+│                                                                                          │
+│   Total latency: 4200ms  ← User phải chờ cả việc extract/store opinions!               │
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                            VỚI TASK BACKEND                                              │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│   User gọi reflect("What do you think about X?")                                        │
+│                                                                                          │
+│   Main Flow (USER SEES):                                                                 │
+│   ┌────────────────────────────────────────────────────────────────────────────────────┐│
+│   │ T0: Recall facts (500ms)                                                           ││
+│   │ T1: Generate response with LLM (2000ms)                                            ││
+│   │ T2: submit_task({"type": "form_opinion", ...})  ← ~0ms (just queue)                ││
+│   │ T3: Return response to user                                                        ││
+│   └────────────────────────────────────────────────────────────────────────────────────┘│
+│                                                                                          │
+│   Total latency: 2500ms  ← 40% faster! User gets response immediately                  │
+│                                                                                          │
+│   Background (INVISIBLE TO USER):                                                        │
+│   ┌────────────────────────────────────────────────────────────────────────────────────┐│
+│   │ [Background worker thread]                                                         ││
+│   │ T4: Extract opinions from response (1000ms)                                        ││
+│   │ T5: Store opinions to database (500ms)                                             ││
+│   │ T6: Done (no one waiting for this)                                                 ││
+│   └────────────────────────────────────────────────────────────────────────────────────┘│
+│                                                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
