@@ -215,7 +215,7 @@ class MemoryEngine(MemoryEngineInterface):
             db_url: PostgreSQL connection URL. Defaults to HINDSIGHT_API_DATABASE_URL env var or "pg0".
                     Also supports pg0 URLs: "pg0" or "pg0://instance-name" or "pg0://instance-name:port"
             memory_llm_provider: LLM provider. Defaults to HINDSIGHT_API_LLM_PROVIDER env var or "groq".
-            memory_llm_api_key: API key for the LLM provider. Defaults to HINDSIGHT_API_LLM_API_KEY env var.
+            memory_llm_api_key: API key for the LLM provider. Defaults to API_LLM_API_KEY env var.
             memory_llm_model: Model name. Defaults to HINDSIGHT_API_LLM_MODEL env var.
             memory_llm_base_url: Base URL for the LLM API. Defaults based on provider.
             embeddings: Embeddings implementation. If not provided, created from env vars.
@@ -252,7 +252,7 @@ class MemoryEngine(MemoryEngineInterface):
         memory_llm_api_key = memory_llm_api_key or config.llm_api_key
         # Ollama doesn't require an API key
         if not memory_llm_api_key and memory_llm_provider != "ollama":
-            raise ValueError("LLM API key is required. Set HINDSIGHT_API_LLM_API_KEY environment variable.")
+            raise ValueError("LLM API key is required. Set API_LLM_API_KEY environment variable.")
         memory_llm_model = memory_llm_model or config.llm_model
         memory_llm_base_url = memory_llm_base_url or config.get_llm_base_url() or None
         # Track pg0 instance (if used)
@@ -3103,7 +3103,7 @@ Guidelines:
         """
         # Use cached LLM config
         if self._llm_config is None:
-            raise ValueError("Memory LLM API key not set. Set HINDSIGHT_API_LLM_API_KEY environment variable.")
+            raise ValueError("Memory LLM API key not set. Set API_LLM_API_KEY environment variable.")
 
         # Authenticate tenant and set schema in context (for fq_table())
         await self._authenticate_tenant(request_context)

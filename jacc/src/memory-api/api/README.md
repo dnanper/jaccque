@@ -1,39 +1,28 @@
 # Memory API
 
-Memory System for AI Agents - Temporal, Semantic, and Entity Memory Architecture.
-
-## Overview
-
-This API provides a comprehensive memory system designed for AI agents, featuring:
-
-- **Temporal Memory**: Time-aware memory storage and retrieval
-- **Semantic Memory**: Vector-based semantic search using embeddings
-- **Entity Memory**: Structured entity extraction and relationship tracking
+A memory system for AI agents with temporal + semantic + entity memory architecture.
 
 ## Features
 
-- PostgreSQL with pgvector for vector similarity search
-- FastAPI-based REST and MCP interfaces
-- Support for multiple LLM providers (OpenAI, Google Gemini, Ollama)
-- Local embeddings with sentence-transformers
-
-## Requirements
-
-- Python 3.11+
-- PostgreSQL with pgvector extension
-- Docker (recommended)
+- PostgreSQL with pgvector for vector storage
+- Multi-strategy retrieval (TEMPR)
+- LLM-powered fact extraction and reasoning
+- FastAPI HTTP endpoints
+- MCP (Model Context Protocol) support
 
 ## Quick Start
 
 ```bash
-# Using Docker Compose
-docker-compose up --build
+# Start database
+docker-compose -f docker-compose.dev.yml up -d
 
-# Or run locally
+# Install package
 pip install -e .
-uvicorn src.main:app --reload
+
+# Run tests
+python test_direct.py
 ```
 
-## License
+## Development
 
-MIT License
+See the parent directory's README for full documentation.

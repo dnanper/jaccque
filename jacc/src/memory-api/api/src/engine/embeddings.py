@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 
 import httpx
 
-from config import (
+from src.config import (
     DEFAULT_EMBEDDINGS_LOCAL_MODEL,
     DEFAULT_EMBEDDINGS_PROVIDER,
     EMBEDDING_DIMENSION,

@@ -15,7 +15,7 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, LengthFinishReasonError
 
-from config import (
+from src.config import (
     DEFAULT_LLM_MAX_CONCURRENT,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_PROVIDER,

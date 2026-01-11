@@ -1,0 +1,42 @@
+# Memory API - Development Mode (Shared with Production)
+# ========================================================
+# Uses the SAME database setup as production!
+# - Same Dockerfile/build
+# - Same volume (memory-pg-data)
+# - Same container name
+# - Port exposed to localhost for local code
+
+services:
+  database:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    container_name: memory-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-memory}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-memory_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-memory_db}
+    volumes:
+      - pg_data:/var/lib/postgresql/data  # Same as production!
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-memory} -d ${POSTGRES_DB:-memory_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+    name: memory-pg-data  # Same as production!
+
+# ============================================
+# This is IDENTICAL to the database in docker-compose.yml
+# Only difference: no API container (you run it locally)
+#
+# Usage:
+#   docker-compose -f docker-compose.dev.yml up -d
+#   cd api && pip install -e .
+#   python test_direct.py
+# ============================================

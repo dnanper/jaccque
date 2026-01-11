@@ -21,7 +21,7 @@ src_dir = Path(__file__).parent.parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from models import Base
+from src.models import Base
 
 
 # Load environment variables based on MEMORY_API_DATABASE_URL env var or default to local

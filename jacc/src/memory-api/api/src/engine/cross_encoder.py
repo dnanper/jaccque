@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 
 import httpx
 
-from config import (
+from src.config import (
     DEFAULT_RERANKER_LOCAL_MODEL,
     DEFAULT_RERANKER_PROVIDER,
     ENV_RERANKER_LOCAL_MODEL,
