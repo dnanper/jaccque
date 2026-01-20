@@ -8,12 +8,15 @@ Usage:
     from agent.config import AgentConfig
     from agent.models import get_model
     from agent.environments import get_environment
+    from agent.memory import get_memory_client, MemoryConfig
     
     config = AgentConfig.from_yaml("config.yaml")
     model = get_model("api", model_name="gemini/gemini-2.0-flash")
     env = get_environment({"type": "local"})
     
-    graph = build_agent_graph(config, model, env)
+    # With memory
+    memory = get_memory_client(MemoryConfig())
+    graph = build_agent_graph(config, model, env, memory_client=memory)
     result = graph.invoke(initial_state)
 """
 
@@ -37,6 +40,7 @@ from agent.nodes import (
 if TYPE_CHECKING:
     from agent.models.base import BaseModelProvider
     from agent.environments.base import Environment
+    from agent.memory.base import BaseMemoryClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,7 @@ def build_agent_graph(
     config: AgentConfig,
     model: "BaseModelProvider",
     environment: "Environment",
+    memory_client: "BaseMemoryClient | None" = None,
 ) -> StateGraph:
     """Build the agent workflow graph.
     
@@ -55,14 +60,15 @@ def build_agent_graph(
         config: Agent configuration
         model: LLM model provider
         environment: Execution environment
+        memory_client: Optional memory client for recall/retain
         
     Returns:
         Compiled LangGraph StateGraph
     """
-    # Create nodes
-    think = ThinkNode(config=config, model=model)
+    # Create nodes (with optional memory integration)
+    think = ThinkNode(config=config, model=model, memory_client=memory_client)
     act = ActNode(config=config, environment=environment)
-    observe = ObserveNode(config=config)
+    observe = ObserveNode(config=config, memory_client=memory_client)
     decide = DecideNode(config=config)
     
     # Build graph
@@ -92,7 +98,7 @@ def build_agent_graph(
     # Set entry point
     graph.set_entry_point("think")
     
-    logger.info("Agent graph built successfully")
+    logger.info(f"Agent graph built (memory={'enabled' if memory_client else 'disabled'})")
     
     return graph.compile()
 
@@ -102,11 +108,13 @@ def run_agent(
     config: AgentConfig,
     model: "BaseModelProvider",
     environment: "Environment",
+    memory_client: "BaseMemoryClient | None" = None,
+    instance_id: str | None = None,
 ) -> AgentState:
     """Run agent on a task and return final state.
     
     Convenience function that:
-    1. Builds the graph
+    1. Builds the graph (with optional memory)
     2. Creates initial state with system/task prompts
     3. Runs the agent to completion
     4. Returns final state
@@ -116,12 +124,14 @@ def run_agent(
         config: Agent configuration
         model: LLM model provider
         environment: Execution environment
+        memory_client: Optional memory client for experience
+        instance_id: Optional instance ID for tracking
         
     Returns:
         Final AgentState after completion
     """
     # Build graph
-    graph = build_agent_graph(config, model, environment)
+    graph = build_agent_graph(config, model, environment, memory_client)
 
     # DockerConfig info: image, cwd, timeout..
     env_vars = environment.get_template_vars()
@@ -147,6 +157,10 @@ def run_agent(
         task_message=task_prompt,
     )
     
+    # Add instance_id to working memory for tracking
+    if instance_id:
+        initial_state["working_memory"]["instance_id"] = instance_id
+    
     logger.info(f"Running agent on task: {task[:100]}...")
     
     # Run graph
@@ -164,7 +178,47 @@ def run_agent(
     return final_state
 
 
+async def run_agent_async(
+    task: str,
+    config: AgentConfig,
+    model: "BaseModelProvider",
+    environment: "Environment",
+    memory_client: "BaseMemoryClient | None" = None,
+    instance_id: str | None = None,
+) -> AgentState:
+    """Run agent on a task asynchronously.
+    
+    Same as run_agent but async-compatible.
+    Use this when you need to await memory operations properly.
+    
+    Args:
+        task: The task/problem description
+        config: Agent configuration
+        model: LLM model provider
+        environment: Execution environment
+        memory_client: Optional memory client for experience
+        instance_id: Optional instance ID for tracking
+        
+    Returns:
+        Final AgentState after completion
+    """
+    # Initialize memory client if provided
+    if memory_client and not memory_client.is_initialized:
+        await memory_client.initialize()
+    
+    # Run the sync agent (graph handles async internally)
+    return run_agent(
+        task=task,
+        config=config,
+        model=model,
+        environment=environment,
+        memory_client=memory_client,
+        instance_id=instance_id,
+    )
+
+
 __all__ = [
     "build_agent_graph",
     "run_agent",
+    "run_agent_async",
 ]

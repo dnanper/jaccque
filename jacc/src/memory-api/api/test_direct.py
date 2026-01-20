@@ -45,7 +45,7 @@ async def main():
     
     # Retain a memory
     print("\n[4] Storing a code pattern...")
-    bank_id = "dev_test"
+    bank_id = "swe_agent"
     # ctx = RequestContext()
     
     # await engine.retain_batch_async(

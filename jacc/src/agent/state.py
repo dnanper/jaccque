@@ -4,7 +4,7 @@ Defines the state that flows through the LangGraph workflow.
 Uses TypedDict with Annotated reducers for LangGraph compatibility.
 """
 
-from typing import TypedDict, Literal, Annotated, Any
+from typing import TypedDict, Literal, Annotated, Any, List
 from operator import add
 import time
 
@@ -113,6 +113,8 @@ def create_initial_state(
         step_count=0,
         total_cost=0.0,
         start_time=now,
+        global_guidelines=[],
+        local_summary="",
     )
 
 

@@ -2,7 +2,15 @@
 """Run Jacc agent on SWE-bench instances.
 
 Usage:
-    python -m agent.run_swebench --subset lite --split dev --slice "0:1" -m gemini/gemini-2.0-flash -o ./output
+    python -m agent.run_swebench --subset lite --split dev --slice "0:1" -m gemini/gemini-2.5-flash -o ./output
+
+With Memory Integration:
+    # Step 1: Start memory database (one-time or if not running)
+    cd jacc/src/memory-api
+    docker-compose -f docker-compose.dev.yml up -d
+    
+    # Step 2: Run with --memory flag
+    python -m agent.run_swebench --memory --subset lite --split dev --slice "0:1" -o ./output
 """
 
 import argparse
@@ -20,6 +28,7 @@ from datasets import load_dataset
 from agent import AgentConfig, run_agent
 from agent.models import get_model
 from agent.environments import get_environment
+from agent.memory import get_memory_client, MemoryConfig, NoOpMemoryClient
 
 
 logging.basicConfig(
@@ -93,6 +102,7 @@ def process_instance(
     provider: str,
     timeout: int,
     output_dir: Path,
+    memory_client = None,
 ) -> tuple[str, str]:
     """Process a single SWE-bench instance."""
     instance_id = instance["instance_id"]
@@ -117,7 +127,14 @@ def process_instance(
     
     exit_status, result = None, None
     try:
-        final_state = run_agent(problem_statement, config, model, env)
+        final_state = run_agent(
+            problem_statement, 
+            config, 
+            model, 
+            env,
+            memory_client=memory_client,
+            instance_id=instance_id,
+        )
         exit_status = final_state.get("exit_status", "unknown")
         
         # Get the patch (git diff)
@@ -163,7 +180,7 @@ def main():
     parser.add_argument("--filter", type=str, default="", help="Filter by regex")
     
     # Model
-    parser.add_argument("-m", "--model", type=str, default="gemini/gemini-2.0-flash", help="Model name")
+    parser.add_argument("-m", "--model", type=str, default="gemini/gemini-2.5-flash", help="Model name")
     parser.add_argument("--provider", type=str, default="api", help="Model provider")
     
     # Config
@@ -172,6 +189,10 @@ def main():
     
     # Output
     parser.add_argument("-o", "--output", type=str, required=True, help="Output directory")
+    
+    # Memory
+    parser.add_argument("--memory", action="store_true", help="Enable memory integration")
+    parser.add_argument("--memory-bank", type=str, default="swe_agent", help="Memory bank ID")
     
     # Other
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -192,6 +213,34 @@ def main():
     else:
         config = AgentConfig.default()
     
+    # Initialize memory client if enabled
+    memory_client = None
+    if args.memory:
+        from agent.memory import run_async
+        logger.info("Initializing memory client...")
+        logger.info("Make sure memory database is running:")
+        logger.info("  cd jacc/src/memory-api && docker-compose -f docker-compose.dev.yml up -d")
+        
+        try:
+            memory_config = MemoryConfig(bank_id=args.memory_bank)
+            memory_client = get_memory_client(memory_config, mode="direct")
+            run_async(memory_client.initialize(), timeout=60)
+            logger.info(f"Memory enabled: bank_id={args.memory_bank}")
+        except Exception as e:
+            logger.error(f"Failed to initialize memory: {e}")
+            logger.error("")
+            logger.error("=" * 60)
+            logger.error("MEMORY DATABASE NOT AVAILABLE")
+            logger.error("=" * 60)
+            logger.error("To start the memory database:")
+            logger.error("  cd jacc/src/memory-api")
+            logger.error("  docker-compose -f docker-compose.dev.yml up -d")
+            logger.error("")
+            logger.error("Then retry with --memory flag.")
+            logger.error("=" * 60)
+            logger.warning("Continuing without memory integration...")
+            memory_client = NoOpMemoryClient()
+    
     # Load dataset
     dataset_path = DATASET_MAPPING.get(args.subset, args.subset)
     logger.info(f"Loading dataset: {dataset_path}, split: {args.split}")
@@ -210,30 +259,43 @@ def main():
     logger.info(f"Running on {len(instances)} instances")
     
     # Process each instance
-    for instance in instances:
-        instance_id = instance["instance_id"]
-        
-        try:
-            exit_status, result = process_instance(
-                instance=instance,
-                config=config,
-                model_name=args.model,
-                provider=args.provider,
-                timeout=args.timeout,
-                output_dir=output_dir,
-            )
+    try:
+        for instance in instances:
+            instance_id = instance["instance_id"]
             
-            update_preds_file(output_dir, instance_id, args.model, result)
-            
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
-            break
-        except Exception as e:
-            logger.exception(f"Uncaught error for {instance_id}: {e}")
-            continue
+            try:
+                exit_status, result = process_instance(
+                    instance=instance,
+                    config=config,
+                    model_name=args.model,
+                    provider=args.provider,
+                    timeout=args.timeout,
+                    output_dir=output_dir,
+                    memory_client=memory_client,
+                )
+                
+                update_preds_file(output_dir, instance_id, args.model, result)
+                
+            except KeyboardInterrupt:
+                logger.info("Interrupted by user")
+                break
+            except Exception as e:
+                logger.exception(f"Uncaught error for {instance_id}: {e}")
+                continue
+    finally:
+        # Cleanup memory client
+        if memory_client and hasattr(memory_client, 'close'):
+            try:
+                from agent.memory import run_async, close_async_runner
+                run_async(memory_client.close(), timeout=5)
+                close_async_runner()
+                logger.info("Memory client closed")
+            except Exception:
+                pass
     
     logger.info("Done!")
 
 
 if __name__ == "__main__":
     main()
+
